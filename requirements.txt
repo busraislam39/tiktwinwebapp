@@ -1,0 +1,11 @@
+Django>=4.2
+psycopg2-binary
+djangorestframework~=3.16.0
+django-cors-headers
+django-storages
+azure-storage-blob
+djoser
+drf-yasg
+gunicorn
+whitenoise
+python-dotenv

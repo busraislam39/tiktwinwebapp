@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TikTwin • Latest Videos</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    :root { --card-radius: 18px; }
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0f1115; color: #e9eef3; }
+    .navbar { background: linear-gradient(180deg,#151923,#0f1115); border-bottom: 1px solid #1f2734; }
+    .brand { font-weight: 700; letter-spacing: 0.4px; }
+    .video-card { background: #141925; border: 1px solid #1e2636; border-radius: var(--card-radius); overflow: hidden; transition: transform .18s ease, box-shadow .18s ease; }
+    .video-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+    .video-wrap { position: relative; width: 100%; background: #0b0e16; }
+    .vertical-916 { aspect-ratio: 9 / 16; width: 100%; object-fit: cover; }
+    .badge-soft { background: #1a2232; border: 1px solid #293449; color: #bcd0e5; }
+    .muted { color: #93a3b8; }
+    .star { cursor: pointer; font-size: 1.1rem; }
+    .star.on { color: #ffd76a; text-shadow: 0 0 10px rgba(255,215,106,.4); }
+    .comment { background: #111726; border: 1px solid #202a3c; border-radius: 12px; padding: .6rem .8rem; }
+    .comment + .comment { margin-top: .5rem; }
+    .loader { height: 180px; display: grid; place-items: center; color: #9ab; }
+    @media (min-width: 992px) { .feed { column-count: 3; column-gap: 1rem; } .masonry { break-inside: avoid; margin-bottom: 1rem; } }
+    @media (max-width: 991.98px) { .feed { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; } }
+    @media (max-width: 575.98px) { .feed { display: grid; grid-template-columns: 1fr; gap: 0.75rem; } }
+    @media (min-width: 576px) { .rate-form .form-select { width: auto; min-width: 110px; } }
+
+    .star-btn {
+      background: transparent;
+      border: none;
+      padding: .25rem;
+      font-size: 1.6rem;
+      cursor: pointer;
+    }
+    .star-btn.on i {
+      color: #ffd76a;
+      text-shadow: 0 0 8px rgba(255,215,106,.4);
+    }
+
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark py-3">
+    <div class="container d-flex align-items-center justify-content-between">
+      <span class="navbar-brand brand">TikTwin</span>
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-outline-light btn-sm" onclick="logout()">Logout</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container my-3">
+    <div id="feed" class="feed"></div>
+    <div id="loader" class="loader">Loading latest videos…</div>
+    <div class="text-center my-4">
+      <button id="loadMoreBtn" class="btn btn-outline-light d-none">Load more</button>
+    </div>
+  </main>
+
+  <div class="position-fixed top-0 end-0 p-3" style="z-index: 1060">
+    <div id="toast" class="toast align-items-center text-bg-dark border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div id="toastBody" class="toast-body">Saved.</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // ===== API endpoints
+    const API_BASE = "/api";
+    const VIDEO_ENDPOINT   = `${API_BASE}/videos/`;
+    const RATING_ENDPOINT  = `${API_BASE}/ratings/`;
+    const COMMENT_ENDPOINT = `${API_BASE}/comments/`;
+
+    // ===== Auth (Djoser JWT)
+    const AUTH_BASE = "/auth";
+    const REFRESH_URL = `${AUTH_BASE}/jwt/refresh/`;
+    const ACCESS_KEY = 'access_token';
+    const REFRESH_KEY = 'refresh_token';
+
+    function getAccessToken()  { return localStorage.getItem(ACCESS_KEY); }
+    function getRefreshToken() { return localStorage.getItem(REFRESH_KEY); }
+    function setAccessToken(t) { localStorage.setItem(ACCESS_KEY, t); }
+    function clearTokens() { localStorage.removeItem(ACCESS_KEY); localStorage.removeItem(REFRESH_KEY); }
+
+    function parseJwt(token) {
+      try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c =>
+          '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+        ).join(''));
+        return JSON.parse(jsonPayload);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function isAccessExpired(token, skewSeconds = 30) {
+      const data = parseJwt(token);
+      if (!data || !data.exp) return true; // treat as expired if invalid
+      const now = Math.floor(Date.now() / 1000);
+      return (data.exp - skewSeconds) <= now;
+    }
+
+    // Call this at startup to ensure valid token, else try refresh
+    async function ensureFreshAccess() {
+      const access = getAccessToken();
+      const refresh = getRefreshToken();
+
+      if (!access || !refresh) return false;
+
+      if (!isAccessExpired(access)) {
+        return true; // still valid
+      }
+      // Access expired or about to expire: try refresh
+      const ok = await refreshAccessToken();
+      return !!ok;
+    }
+
+    async function hardRequireAuth() {
+      const ok = await ensureFreshAccess();
+      if (!ok) {
+        clearTokens();
+        window.location.href = '/login';
+        return false;
+      }
+      return true;
+    }
+
+
+    function requireAuth() {
+      const a = getAccessToken();
+      const r = getRefreshToken();
+      if (!a || !r) { window.location.href = '/login'; return false; }
+      return true;
+    }
+
+    async function refreshAccessToken() {
+      const refresh = getRefreshToken();
+      if (!refresh) return false;
+      const res = await fetch(REFRESH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh })
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.access) { setAccessToken(data.access); return true; }
+      return false;
+    }
+
+    async function fetchWithAuth(url, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      const token = getAccessToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      let res = await fetch(url, { ...options, headers });
+      if (res.status === 401) {
+        const ok = await refreshAccessToken();
+        if (!ok) { clearTokens(); window.location.href = '/login'; return res; }
+        const headers2 = { ...(options.headers || {}) };
+        headers2['Authorization'] = `Bearer ${getAccessToken()}`;
+        res = await fetch(url, { ...options, headers: headers2 });
+      }
+      return res;
+    }
+
+    function logout() { clearTokens(); window.location.href = '/login'; }
+
+    // ===== UI helpers
+    const feed = document.getElementById('feed');
+    const loader = document.getElementById('loader');
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
+    const toastEl = document.getElementById('toast');
+    const toastBody = document.getElementById('toastBody');
+    const bsToast = new bootstrap.Toast(toastEl, { delay: 2200 });
+    function notify(msg){ toastBody.textContent = msg; bsToast.show(); }
+
+    function starHtml(avg) {
+      const v = Number.isFinite(avg) ? avg : 0;
+      const stars = [1,2,3,4,5].map(i => `<i class="bi ${i <= Math.round(v) ? 'bi-star-fill on' : 'bi-star'} star"></i>`).join('');
+      return `<div class="d-flex align-items-center gap-2"><span class="muted-small">Avg Rating:</span>${stars}<small class="muted">${avg ?? '0'}</small></div>`;
+    }
+
+    function commentHtml(c) {
+      const when = new Date(c.created_at).toLocaleString();
+      const who = (c.user_display || c.user || 'User');
+
+      return `
+        <div class="comment">
+          <div class="d-flex align-items-start">
+            <div class="flex-grow-1">
+              <div class="d-flex align-items-center mb-1">
+                <strong class="me-2">${who}</strong>
+                <small class="m-1">[${when}]</small>
+              </div>
+              <div class="text-light">${c.text}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+
+    function renderCard(v) {
+      const avg = v.average_rating ?? null;
+
+      const oneLatest = [...(v.comments || [])]
+        .sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 1);
+
+      const comments = oneLatest.length
+        ? oneLatest.map(commentHtml).join('')
+        : '<div class="muted">No comments yet.</div>';
+
+      const genres = v.genre ? `<span class="badge badge-soft me-1">${v.genre}</span>`: '';
+      const videoSrc = v.video_url || v.video_file;
+
+      return `
+        <article class="video-card masonry" id="video-card-${v.id}">
+          <div class="video-wrap">
+            <video class="vertical-916" controls preload="metadata" src="${videoSrc}"></video>
+          </div>
+          <div class="p-3">
+            <div class="d-flex align-items-start justify-content-between gap-2">
+              <div>
+                <div class="fw-semibold">${v.title || 'Untitled'}</div>
+                <div class="muted small">
+                    Publisher: ${v.publisher || 'N/A'}
+                </div>
+                <div class="muted small">
+                    Producer: ${v.producer || 'N/A'}
+                </div>
+                <div class="muted small">Uploaded At: ${new Date(v.uploaded_at).toLocaleString()}</div>
+                <div class="muted small">
+                  Age Restriction: ${v.age_rating && v.age_rating.toLowerCase() !== 'all'
+                      ? `${v.age_rating}+`
+                      : v.age_rating || 'N/A'}
+                </div>
+              </div>
+              ${genres}
+            </div>
+
+            <!-- ratings block -->
+            <div class="mt-2 rating-wrap" data-id="${v.id}">
+              ${starHtml(avg)}
+            </div>
+
+            <div class="mt-3">
+              <div class="rate-inline d-flex align-items-center gap-1 mt-2" data-id="${v.id}" aria-label="Rate this video">
+                ${[1,2,3,4,5].map(i => `
+                  <button type="button" class="star-btn" data-score="${i}" aria-label="Rate ${i}">
+                    <i class="bi bi-star"></i>
+                  </button>`).join('')}
+                <span class="muted small ms-1">(Tap to rate)</span>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <form class="comment-form" data-id="${v.id}">
+                <div class="input-group">
+                  <input class="form-control bg-dark text-light border-0" name="text" placeholder="Add a comment…" />
+                  <button class="btn btn-primary" type="submit">Post</button>
+                </div>
+              </form>
+
+              <!-- comments block -->
+              <div class="mt-2 comments-wrap" data-id="${v.id}">
+                ${comments}
+              </div>
+
+              <div class="mt-2">
+                <button class="btn btn-sm btn-link p-0"
+                        data-action="toggle-comments"
+                        data-state="collapsed"
+                        data-id="${v.id}">
+                  Show all comments
+                </button>
+              </div>
+            </div>
+          </div>
+        </article>`;
+    }
+
+
+    let page = 1; let nextUrl = null; let query = '';
+
+    async function fetchVideos(reset=false) {
+      if (reset) { feed.innerHTML = ''; page = 1; nextUrl = null; }
+      loader.classList.remove('d-none');
+      const url = nextUrl || `${VIDEO_ENDPOINT}?ordering=-uploaded_at&page=${page}${query ? `&search=${encodeURIComponent(query)}`: ''}`;
+      try {
+        const res = await fetchWithAuth(url);
+        if (!res.ok) throw new Error(`Failed to load videos (${res.status})`);
+        const data = await res.json();
+        const items = data.results || data || [];
+        items.forEach(v => feed.insertAdjacentHTML('beforeend', renderCard(v)));
+        nextUrl = data.next || null; page += 1;
+        document.getElementById('loadMoreBtn').classList.toggle('d-none', !nextUrl);
+      } catch (e) {
+        console.error(e); notify(e.message || 'Could not load videos');
+      } finally {
+        loader.classList.add('d-none');
+      }
+    }
+
+    async function postJSON(url, payload) {
+      const res = await fetchWithAuth(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json().catch(() => ({}));
+    }
+
+    async function refreshCardParts(id) {
+      // fetch latest video details
+      const res = await fetchWithAuth(`${VIDEO_ENDPOINT}${id}/`);
+      if (!res.ok) return;
+
+      const v = await res.json();
+
+      // Update rating
+      const ratingWrap = document.querySelector(`.rating-wrap[data-id="${id}"]`);
+      if (ratingWrap) {
+        ratingWrap.innerHTML = starHtml(v.average_rating ?? null);
+      }
+
+      // Update comments (respect expanded/collapsed state)
+      const toggleBtn = document.querySelector(`[data-action="toggle-comments"][data-id="${id}"]`);
+      const commentsWrap = document.querySelector(`.comments-wrap[data-id="${id}"]`);
+      if (commentsWrap) {
+        const allSorted = [...(v.comments || [])].sort(
+          (a,b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+
+        const state = toggleBtn?.dataset.state || 'collapsed';
+        const toShow = state === 'expanded' ? allSorted : allSorted.slice(0, 1);
+
+        commentsWrap.innerHTML = toShow.length
+          ? toShow.map(commentHtml).join('')
+          : '<div class="muted">No comments yet.</div>';
+      }
+    }
+
+
+    document.addEventListener('submit', async (e) => {
+      const rateForm = e.target.closest('.rate-form');
+      if (rateForm) {
+        e.preventDefault();
+        const id = rateForm.dataset.id;
+        const score = Number(new FormData(rateForm).get('score'));
+        try {
+          await postJSON(RATING_ENDPOINT, { video: id, score });
+          notify('Thanks for rating!');
+          await refreshCardParts(id); // ⬅️ refresh average rating (and comments if you want)
+        } catch (err) {
+          notify(err.message || 'Could not submit rating');
+        }
+        return;
+      }
+
+
+      const commentForm = e.target.closest('.comment-form');
+      if (commentForm) {
+        e.preventDefault();
+        const id = commentForm.dataset.id;
+        const text = new FormData(commentForm).get('text');
+        if (!text.trim()) return notify('Please write a comment');
+        try {
+          await postJSON(COMMENT_ENDPOINT, { video: id, text });
+          notify('Comment posted');
+          commentForm.reset();
+          await refreshCardParts(id); // ⬅️ show latest or all depending on state
+        } catch (err) {
+          notify(err.message || 'Could not post comment');
+        }
+        return;
+      }
+
+    });
+
+    document.addEventListener('click', async (e) => {
+      const moreBtn = e.target.closest('#loadMoreBtn');
+      if (moreBtn) return fetchVideos();
+
+      const toggle = e.target.closest('[data-action="toggle-comments"]');
+      if (toggle) {
+        const id = toggle.dataset.id;
+        const state = toggle.dataset.state || 'collapsed';
+        const box = toggle.parentElement.previousElementSibling; // comments container
+
+        if (state === 'collapsed') {
+          // Expand: fetch full comments, show all
+          try {
+            const res = await fetchWithAuth
+              ? await fetchWithAuth(`${VIDEO_ENDPOINT}${id}/`)
+              : await fetch(`${VIDEO_ENDPOINT}${id}/`);
+            if (!res.ok) throw new Error('Failed to load comments');
+            const v = await res.json();
+            const all = [...(v.comments || [])]
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+            box.innerHTML = all.length
+              ? all.map(commentHtml).join('')
+              : '<div class="muted">No comments yet.</div>';
+            toggle.dataset.state = 'expanded';
+            toggle.textContent = 'Show less';
+          } catch (err) {
+            notify('Could not load comments');
+          }
+        } else {
+          // Collapse: show just latest one again
+          try {
+            const res = await (fetchWithAuth
+              ? fetchWithAuth(`${VIDEO_ENDPOINT}${id}/`)
+              : fetch(`${VIDEO_ENDPOINT}${id}/`));
+            if (!res.ok) throw new Error();
+            const v = await res.json();
+            const oneLatest = [...(v.comments || [])]
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+              .slice(0, 1);
+            box.innerHTML = oneLatest.length
+              ? oneLatest.map(commentHtml).join('')
+              : '<div class="muted">No comments yet.</div>';
+          } catch (_) {
+            // fallback if fetch fails: just keep what was there or show muted message
+          }
+          toggle.dataset.state = 'collapsed';
+          toggle.textContent = 'Show all comments';
+        }
+      }
+
+      const starBtn = e.target.closest('.star-btn');
+      if (starBtn) {
+        const score = parseInt(starBtn.dataset.score, 10);
+        const wrapper = starBtn.closest('.rate-inline');
+        const videoId = wrapper.dataset.id;
+
+        // Update UI immediately
+        wrapper.querySelectorAll('.star-btn').forEach(btn => {
+          const val = parseInt(btn.dataset.score, 10);
+          btn.classList.toggle('on', val <= score);
+          const icon = btn.querySelector('i');
+          icon.classList.toggle('bi-star-fill', val <= score);
+          icon.classList.toggle('bi-star', val > score);
+        });
+
+        // Send rating to API
+        try {
+          await postJSON(RATING_ENDPOINT, { video: videoId, score });
+          notify('Thanks for rating!');
+          await refreshCardParts(videoId);
+        } catch (err) {
+          notify(err.message || 'Could not submit rating');
+        }
+      }
+
+    });
+
+
+    // if (requireAuth()) { fetchVideos(true); }
+    hardRequireAuth().then(ok => { if (ok) fetchVideos(true); });
+  </script>
+</body>
+</html>

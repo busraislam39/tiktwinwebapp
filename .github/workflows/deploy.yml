@@ -1,0 +1,46 @@
+name: Build & Deploy Django to Azure App Service
+
+on:
+  push:
+    branches: [ main ]  # change if needed
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: tiktwinwebapp
+  PYTHON_VERSION: '3.11'
+  DJANGO_SETTINGS_MODULE: tiktwin.settings
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Django collectstatic
+        run: |
+          python manage.py collectstatic --noinput
+
+      - name: Archive app for deployment
+        run: |
+          mkdir -p packaged
+          zip -r packaged/app.zip . -x ".git/*"
+
+      # Option A: Use publish profile (simple)
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: packaged/app.zip
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
