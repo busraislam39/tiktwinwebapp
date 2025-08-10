@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth import login, get_user_model, authenticate
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import render, redirect
 from rest_framework import viewsets, permissions, filters
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
@@ -26,6 +27,17 @@ class VideoViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [permissions.IsAuthenticated(), IsCreatorUser()]
         return [permissions.IsAuthenticatedOrReadOnly()]
+
+    def get_queryset(self):
+        qs = Video.objects.all().order_by('-uploaded_at')
+
+        # Dedicated search param
+        q = self.request.query_params.get('q') or self.request.query_params.get('title')
+        if q:
+            qs = qs.filter(Q(title__icontains=q))
+            print(qs)
+
+        return qs
 
 
 class CommentViewSet(viewsets.ModelViewSet):
