@@ -28,15 +28,25 @@
     @media (max-width: 575.98px) { .feed { display: grid; grid-template-columns: 1fr; gap: 0.75rem; } }
     @media (min-width: 576px) { .rate-form .form-select { width: auto; min-width: 110px; } }
     @media (max-width: 576px) {
+      /* Input */
       #searchInput {
         font-size: 16px !important;
+        padding: .375rem .5rem;
+        height: 40px;                   /* unify height */
         line-height: 1.4;
       }
-      #searchForm .btn {
-        font-size: 16px !important;
-        padding-top: .375rem;
-        padding-bottom: .375rem;
+
+      /* Buttons (icon + Search + Logout) */
+      .navbar .btn-sm {
+        font-size: 16px !important;     /* match input font to avoid zoom + match height */
+        padding: .375rem .6rem !important;
+        height: 40px;                   /* same as input */
+        display: inline-flex;           /* center icon/text vertically */
+        align-items: center;
       }
+
+      /* Ensure the magnifier icon is centered inside the button */
+      #searchToggle i { line-height: 1; }
     }
 
     .star-btn {
